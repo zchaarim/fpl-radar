@@ -29,3 +29,7 @@ Transfers and Plan are nav stubs for later.
 ## CI
 
 PRs and `main` run typecheck/build, Gitleaks, npm audit, Trivy, and CodeQL. Details: [docs/cicd.md](docs/cicd.md).
+
+## CI
+
+PRs and `main` run typecheck/build, Gitleaks, npm audit, Trivy, and CodeQL. Details: [docs/cicd.md](docs/cicd.md).
