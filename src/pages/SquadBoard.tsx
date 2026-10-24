@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ApiError, fetchBoard } from "../api/client";
 import type { BoardPlayer, BoardResponse, MetricId, PlayerSearchHit } from "../api/types";
@@ -34,6 +35,8 @@ const XI_ROWS: { type: number; label: string }[] = [
 ];
 
 const MAX_FT = 5;
+const GW_HOLD_MS = 40;
+const GW_FADE_MS = 50;
 
 export function SquadBoard() {
   const { entryId = "" } = useParams();
@@ -44,9 +47,14 @@ export function SquadBoard() {
 
   const stored = readDraft(entryId) ?? readSavedSquad(entryId);
   const [board, setBoard] = useState<BoardResponse | null>(null);
+  const [view, setView] = useState<BoardResponse | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [metric, setMetric] = useState<MetricId>("xp");
+  const [gwAnim, setGwAnim] = useState<"idle" | "hold" | "in">("idle");
+  const pendingEventRef = useRef<number | null>(null);
+  const holdStartedRef = useRef(0);
+  const boardCacheRef = useRef(new Map<string, BoardResponse>());
   const [elements, setElements] = useState<number[] | undefined>(stored?.elements);
   const [ftOverride, setFtOverride] = useState<number | undefined>(stored?.ft);
   const [bankOverride, setBankOverride] = useState<number | undefined>(stored?.bank);
@@ -78,6 +86,41 @@ export function SquadBoard() {
     setViceId(next?.vice);
   }, [entryId, navigate]);
 
+  function boardCacheKey(eventId: number) {
+    const ids = elements?.join(",") ?? "";
+    return `${entryId}:${eventId}:${ids}:${bankOverride ?? ""}:${captainId ?? ""}:${viceId ?? ""}`;
+  }
+
+  function hydrateBoard(payload: BoardResponse): BoardResponse {
+    const players = pinArmbandsToXi(payload.players);
+    return {
+      ...payload,
+      players,
+      team_xp: players.reduce((sum, player) => sum + appliedXp(player), 0),
+    };
+  }
+
+  function prefetchNeighbors(payload: BoardResponse) {
+    const ids = payload.events.map((event) => event.id);
+    const index = ids.indexOf(payload.event.id);
+    for (const neighbor of [ids[index - 1], ids[index + 1]]) {
+      if (neighbor == null) continue;
+      const key = boardCacheKey(neighbor);
+      if (boardCacheRef.current.has(key)) continue;
+      fetchBoard(Number(entryId), {
+        event: neighbor,
+        elements,
+        bank: bankOverride,
+        captain: captainId,
+        vice: viceId,
+      })
+        .then((cached) => {
+          boardCacheRef.current.set(boardCacheKey(cached.event.id), hydrateBoard(cached));
+        })
+        .catch(() => {});
+    }
+  }
+
   useEffect(() => {
     if (!/^\d+$/.test(entryId)) return;
     let cancelled = false;
@@ -89,24 +132,23 @@ export function SquadBoard() {
     }
     if (!current) setLoading(true);
     setError("");
-    fetchBoard(Number(entryId), {
+    const query = {
       event: eventFromUrl,
       elements,
       bank: bankOverride,
       captain: captainId,
       vice: viceId,
-    })
+    };
+    fetchBoard(Number(entryId), query)
       .then((payload) => {
         if (cancelled) return;
-        const players = pinArmbandsToXi(payload.players);
-        const bands = armbandIds(players);
-        setBoard({
-          ...payload,
-          players,
-          team_xp: players.reduce((sum, player) => sum + appliedXp(player), 0),
-        });
+        const next = hydrateBoard(payload);
+        const bands = armbandIds(next.players);
+        boardCacheRef.current.set(boardCacheKey(next.event.id), next);
+        setBoard(next);
         setCaptainId(bands.captain);
         setViceId(bands.vice);
+        prefetchNeighbors(next);
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -129,33 +171,70 @@ export function SquadBoard() {
     };
   }, [entryId, eventFromUrl, elements, fresh, setSearchParams]);
 
-  const events = board?.events ?? [];
-  const selectedId = board?.event.id;
+  const display = view ?? board;
+  const events = display?.events ?? [];
+  const selectedId = display?.event.id;
   const selectedIndex = events.findIndex((e) => e.id === selectedId);
   const canPrev = selectedIndex > 0;
   const canNext = selectedIndex >= 0 && selectedIndex < events.length - 1;
-  const replaceable = board?.mode === "predicted";
+  const liveGw = Boolean(display?.event.started);
+  const replaceable = Boolean(display);
+  const gwClass = gwAnim === "idle" ? "" : ` gw-${gwAnim}`;
   const ftShown = ftOverride ?? board?.free_transfers ?? 0;
   const ftLabel =
     ftOverride != null ? "Adjusted here" : board?.free_transfers_source === "history_estimate" ? "Estimated" : "";
   const bankPounds = bankOverride ?? board?.bank.pounds ?? 0;
   const bankTenths = Math.round(bankPounds * 10);
   const bankLabel = bankOverride != null ? "Adjusted here" : "";
-  const takenIds = useMemo(() => new Set((board?.players ?? []).map((p) => p.element_id)), [board]);
+  const takenIds = useMemo(() => new Set((display?.players ?? []).map((p) => p.element_id)), [display]);
   const teamXp = useMemo(
-    () => (board ? board.players.reduce((sum, player) => sum + appliedXp(player), 0) : 0),
-    [board],
+    () => (display ? display.players.reduce((sum, player) => sum + appliedXp(player), 0) : 0),
+    [display],
   );
   const legalSubTargets = useMemo(
-    () => (board && subbing ? legalStarterIdsForSub(board.players, subbing) : new Set<number>()),
-    [board, subbing],
+    () => (display && subbing ? legalStarterIdsForSub(display.players, subbing) : new Set<number>()),
+    [display, subbing],
   );
 
   function goEvent(nextId: number) {
+    pendingEventRef.current = nextId;
+    holdStartedRef.current = performance.now();
+    const cached = boardCacheRef.current.get(boardCacheKey(nextId));
+    flushSync(() => setGwAnim("hold"));
+    if (cached) {
+      setBoard(cached);
+      prefetchNeighbors(cached);
+    }
     setSearchParams({ event: String(nextId) });
     setReplacing(null);
     setSubbing(null);
   }
+
+  useEffect(() => {
+    if (!board) return;
+    if (gwAnim === "hold") {
+      if (pendingEventRef.current != null && board.event.id !== pendingEventRef.current) return;
+      const nextMetric: MetricId = board.event.started ? "actual" : "xp";
+      const wait = Math.max(0, GW_HOLD_MS - (performance.now() - holdStartedRef.current));
+      let cancelled = false;
+      const holdTimer = window.setTimeout(() => {
+        if (cancelled) return;
+        setView(board);
+        setMetric(nextMetric);
+        pendingEventRef.current = null;
+        setGwAnim("in");
+      }, wait);
+      return () => {
+        cancelled = true;
+        window.clearTimeout(holdTimer);
+      };
+    }
+    if (gwAnim === "in") {
+      const idleTimer = window.setTimeout(() => setGwAnim("idle"), GW_FADE_MS);
+      return () => window.clearTimeout(idleTimer);
+    }
+    setView(board);
+  }, [board, gwAnim]);
 
   useEffect(() => {
     if (!subbing && !replacing) return;
@@ -289,6 +368,7 @@ export function SquadBoard() {
     setSubbing(null);
     setSubError("");
     setBoard(null);
+    setView(null);
     setLoading(true);
     setFresh((value) => value + 1);
     setSessionTick((value) => value + 1);
@@ -309,14 +389,14 @@ export function SquadBoard() {
   }
 
   const xiGrouped = useMemo(() => {
-    const xi = sortPlayers(board?.players ?? []).filter(isStarter);
+    const xi = sortPlayers(display?.players ?? []).filter(isStarter);
     return XI_ROWS.map((row) => ({
       ...row,
       players: xi.filter((p) => p.element_type === row.type),
     }));
-  }, [board]);
+  }, [display]);
 
-  const bench = useMemo(() => sortPlayers(board?.players ?? []).filter((p) => !isStarter(p)), [board]);
+  const bench = useMemo(() => sortPlayers(display?.players ?? []).filter((p) => !isStarter(p)), [display]);
   const savedSquad = useMemo(() => readSavedSquad(entryId), [entryId, sessionTick]);
   const draftSquad = useMemo(() => readDraft(entryId), [entryId, sessionTick]);
   const hasEdits = Boolean(elements || bankOverride != null || ftOverride != null || draftSquad);
@@ -325,21 +405,21 @@ export function SquadBoard() {
 
   return (
     <Shell entryId={entryId}>
-      {board?.placeholder ? (
+      {display?.placeholder ? (
         <div className="banner">Model features are not ready yet — showing FPL ep_next as placeholder xP.</div>
       ) : null}
-      {loading && !board ? <div className="loading">Loading squad…</div> : null}
+      {loading && !display ? <div className="loading">Loading squad…</div> : null}
       {error ? (
         <p className="error">
           {error}{" "}
           <Link to="/?switch=1">Change FPL ID</Link>
         </p>
       ) : null}
-      {board ? (
+      {display ? (
         <>
           <section className="summary-panel">
             <div className="summary-main">
-              <h1>{board.name || `Team ${board.entry_id}`}</h1>
+              <h1>{display.name || `Team ${display.entry_id}`}</h1>
               <div className="stat-tiles">
                 <div className="stat-tile ft-tile">
                   <span className="stat-label">Budget</span>
@@ -382,24 +462,30 @@ export function SquadBoard() {
                 <Link to="/?switch=1">Change</Link>
               </div>
               <div className="controls">
-                <div className="gw-strip">
-                  <button
-                    type="button"
-                    disabled={!canPrev}
-                    onClick={() => canPrev && goEvent(events[selectedIndex - 1].id)}
-                    aria-label="Previous gameweek"
-                  >
-                    ‹
-                  </button>
-                  <div className="gw-label">GW {board.event.id}</div>
-                  <button
-                    type="button"
-                    disabled={!canNext}
-                    onClick={() => canNext && goEvent(events[selectedIndex + 1].id)}
-                    aria-label="Next gameweek"
-                  >
-                    ›
-                  </button>
+                <div className="gw-cluster">
+                  <span className={`live-flag${liveGw ? "" : " is-off"}`} aria-hidden={!liveGw}>
+                    <span className="live-dot" aria-hidden="true" />
+                    LIVE
+                  </span>
+                  <div className="gw-strip">
+                    <button
+                      type="button"
+                      disabled={!canPrev}
+                      onClick={() => canPrev && goEvent(events[selectedIndex - 1].id)}
+                      aria-label="Previous gameweek"
+                    >
+                      ‹
+                    </button>
+                    <div className="gw-label">GW {display.event.id}</div>
+                    <button
+                      type="button"
+                      disabled={!canNext}
+                      onClick={() => canNext && goEvent(events[selectedIndex + 1].id)}
+                      aria-label="Next gameweek"
+                    >
+                      ›
+                    </button>
+                  </div>
                 </div>
                 <select
                   className="metric"
@@ -407,6 +493,7 @@ export function SquadBoard() {
                   onChange={(e) => setMetric(e.target.value as MetricId)}
                   aria-label="Player metric"
                 >
+                  {liveGw ? <option value="actual">Actual points</option> : null}
                   <option value="xp">Expected points</option>
                   <option value="opponent">Opponent</option>
                   <option value="xgi90">xGI/90</option>
@@ -443,7 +530,7 @@ export function SquadBoard() {
           ) : null}
           {subError ? <p className="error">{subError}</p> : null}
           <div className={`pitch-wrap${replacing ? " with-drawer" : ""}`}>
-            <div className="pitch">
+            <div className={`pitch${gwClass}`}>
               {xiGrouped.map((row) =>
                 row.players.length ? (
                   <section key={row.type} className="pitch-section">
