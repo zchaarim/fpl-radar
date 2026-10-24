@@ -9,6 +9,7 @@ export type BoardEvent = {
   finished: boolean;
   is_current: boolean;
   is_next: boolean;
+  started: boolean;
   deadline_time: string | null;
 };
 
@@ -32,6 +33,8 @@ export type BoardPlayer = {
   news: string;
   metric_xp: number;
   metric_actual: number | null;
+  minutes_played: number | null;
+  fixture_started: boolean;
   opponent: string;
   fixture_count: number;
 };
@@ -55,7 +58,7 @@ export type BoardResponse = {
   players: BoardPlayer[];
 };
 
-export type MetricId = "xp" | "opponent" | "xgi90" | "ownership";
+export type MetricId = "xp" | "actual" | "opponent" | "xgi90" | "ownership";
 
 export type PlayerSearchHit = {
   element_id: number;

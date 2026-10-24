@@ -249,17 +249,17 @@ select {
   color: var(--text);
   cursor: pointer;
   opacity: 0.35;
-  line-height: 1;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  display: grid;
+  place-items: center;
   padding: 0;
+  margin: 0;
 }
 
 .ft-btn span {
   display: block;
   line-height: 1;
-  transform: translate(1px, -2px);
+  font-weight: 600;
+  transform: translateY(-2px);
 }
 
 .ft-tile:hover .ft-btn,
@@ -295,6 +295,12 @@ select {
   gap: 10px;
 }
 
+.gw-cluster {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .gw-strip {
   display: flex;
   align-items: center;
@@ -321,10 +327,34 @@ select {
 }
 
 .gw-label {
-  min-width: 72px;
+  min-width: 64px;
   text-align: center;
   font-weight: 650;
   font-size: 0.9rem;
+}
+
+.live-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #e44545;
+  font-size: 0.55rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  line-height: 1;
+  min-width: 2.9rem;
+}
+
+.live-flag.is-off {
+  visibility: hidden;
+}
+
+.live-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #e44545;
+  box-shadow: 0 0 0 2px rgb(228 69 69 / 22%);
 }
 
 select.metric {
@@ -338,6 +368,25 @@ select.metric {
 .pitch {
   overflow: visible;
   padding-bottom: 4px;
+}
+
+.pitch.gw-hold .card,
+.pitch.gw-in .card {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.pitch.gw-in .card {
+  animation: gw-in 50ms ease-out forwards;
+}
+
+@keyframes gw-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .pitch-section {
