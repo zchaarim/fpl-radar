@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { BoardPlayer, MetricId } from "../api/types";
-import { appliedXp, isStarter } from "../squadRules";
+import { formatPlayerMetric } from "../playerMetric";
+import { isStarter } from "../squadRules";
 import { Availability } from "./Availability";
 
 function photoUrl(code: number): string {
@@ -12,29 +13,6 @@ function initials(name: string): string {
   if (parts.length === 0) return "?";
   if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
   return (parts[0][0] + parts[1][0]).toUpperCase();
-}
-
-function formatMetric(player: BoardPlayer, metric: MetricId): string {
-  switch (metric) {
-    case "xp": {
-      const value = isStarter(player) ? appliedXp(player) : player.metric_xp;
-      return value.toFixed(1);
-    }
-    case "actual": {
-      if (player.minutes_played != null && player.minutes_played > 0) {
-        const raw = player.metric_actual ?? 0;
-        const value = player.is_captain && isStarter(player) ? raw * 2 : raw;
-        return Number.isInteger(value) ? String(value) : value.toFixed(1);
-      }
-      return player.fixture_started ? "0" : "-";
-    }
-    case "opponent":
-      return player.opponent;
-    case "xgi90":
-      return player.xgi90 == null ? "—" : player.xgi90.toFixed(2);
-    case "ownership":
-      return player.selected_by_percent == null ? "—" : `${player.selected_by_percent.toFixed(1)}%`;
-  }
 }
 
 function SwapIcon() {
@@ -153,7 +131,7 @@ export function PlayerCard({
         <span className="price">£{player.now_cost.pounds.toFixed(1)}m</span>
       </div>
       <div className="metric-value">
-        <span>{formatMetric(player, metric)}</span>
+        <span>{formatPlayerMetric(player, metric)}</span>
         {metric === "xp" && player.is_captain && isStarter(player) ? (
           <span className="cap-mult">({player.metric_xp.toFixed(1)} ×2)</span>
         ) : null}
