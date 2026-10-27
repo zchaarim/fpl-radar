@@ -1,7 +1,39 @@
 import type { BoardPlayer } from "./api/types";
 
+export const ELEMENT_TYPE_LABEL: Record<number, string> = {
+  1: "GKP",
+  2: "DEF",
+  3: "MID",
+  4: "FWD",
+};
+
 export function sortPlayers(players: BoardPlayer[]): BoardPlayer[] {
   return [...players].sort((a, b) => (a.position ?? 99) - (b.position ?? 99));
+}
+
+export function isBenchOutfield(player: BoardPlayer): boolean {
+  return !isStarter(player) && player.element_type !== 1;
+}
+
+export function sortBench(players: BoardPlayer[]): BoardPlayer[] {
+  const bench = sortPlayers(players).filter((player) => !isStarter(player));
+  return [...bench.filter((player) => player.element_type === 1), ...bench.filter((player) => player.element_type !== 1)];
+}
+
+export function pinBenchKeeper(players: BoardPlayer[]): BoardPlayer[] {
+  const xi = sortPlayers(players).filter(isStarter);
+  const bench = sortBench(players);
+  return [...xi, ...bench].map((player, index) => ({ ...player, position: index + 1 }));
+}
+
+export function swapBenchOrder(players: BoardPlayer[], a: BoardPlayer, b: BoardPlayer): BoardPlayer[] | null {
+  if (a.element_id === b.element_id || !isBenchOutfield(a) || !isBenchOutfield(b)) return null;
+  const next = players.map((player) => {
+    if (player.element_id === a.element_id) return { ...player, position: b.position };
+    if (player.element_id === b.element_id) return { ...player, position: a.position };
+    return player;
+  });
+  return pinBenchKeeper(next);
 }
 
 export function isStarter(player: BoardPlayer): boolean {
@@ -112,9 +144,20 @@ export function substitutePlayers(
 
 export function legalStarterIdsForSub(players: BoardPlayer[], bench: BoardPlayer): Set<number> {
   const ids = new Set<number>();
+  if (isStarter(bench)) return ids;
   for (const player of players) {
     if (!isStarter(player)) continue;
     if (substitutePlayers(players, bench, player)) ids.add(player.element_id);
+  }
+  return ids;
+}
+
+export function legalBenchIdsForStarter(players: BoardPlayer[], starter: BoardPlayer): Set<number> {
+  const ids = new Set<number>();
+  if (!isStarter(starter)) return ids;
+  for (const player of players) {
+    if (isStarter(player)) continue;
+    if (substitutePlayers(players, player, starter)) ids.add(player.element_id);
   }
   return ids;
 }

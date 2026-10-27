@@ -409,17 +409,11 @@ select.metric {
   padding: 4px 2px;
 }
 
-.board-hint {
-  color: var(--muted);
-  font-size: 0.78rem;
-  margin: 0;
-}
-
 .board-toolbar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 10px 16px;
   margin: 0 0 10px;
 }
@@ -509,7 +503,8 @@ button.card-face {
   box-shadow: 0 0 0 2px var(--accent);
 }
 
-.card.sub-illegal {
+.card.sub-illegal,
+.card.bench-card.sub-illegal {
   opacity: 0.38;
   filter: grayscale(0.25);
 }
@@ -549,8 +544,8 @@ button.card-face {
   position: absolute;
   top: 3px;
   right: 3px;
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   border-radius: 6px;
   border: 1px solid var(--line);
@@ -564,8 +559,8 @@ button.card-face {
 }
 
 .sub-btn svg {
-  width: 13px;
-  height: 13px;
+  width: 16px;
+  height: 16px;
   display: block;
 }
 
@@ -598,10 +593,41 @@ button.card-face {
   opacity: 0.88;
 }
 
+.pitch-section:has(+ .bench-section) {
+  margin-bottom: 0;
+}
+
+.pitch-section:has(+ .bench-section) .pitch-row {
+  padding-bottom: 0;
+}
+
 .bench-section {
-  margin-top: 6px;
-  padding-top: 6px;
+  --bench-split: 24px;
+  margin-top: var(--bench-split);
+  padding-top: calc(var(--bench-split) - 0.31rem);
   border-top: 1px solid var(--line);
+}
+
+.bench-section .pitch-row {
+  padding-top: 0;
+}
+
+.bench-slot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 122px;
+  flex: 0 0 122px;
+}
+
+.bench-pos {
+  color: var(--muted);
+  font-size: 0.62rem;
+  font-weight: 650;
+  letter-spacing: 0.12em;
+  line-height: 1;
+  text-align: center;
+  margin: 0 0 4px;
 }
 
 .card img,
