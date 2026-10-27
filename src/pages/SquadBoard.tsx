@@ -10,11 +10,17 @@ import {
   appliedXp,
   armbandIds,
   assignArmband,
+  ELEMENT_TYPE_LABEL,
+  isBenchOutfield,
   isStarter,
+  legalBenchIdsForStarter,
   legalStarterIdsForSub,
   pinArmbandsToXi,
+  pinBenchKeeper,
+  sortBench,
   sortPlayers,
   substitutePlayers,
+  swapBenchOrder,
 } from "../squadRules";
 import {
   clearSquadSession,
@@ -191,10 +197,21 @@ export function SquadBoard() {
     () => (display ? display.players.reduce((sum, player) => sum + appliedXp(player), 0) : 0),
     [display],
   );
-  const legalSubTargets = useMemo(
-    () => (display && subbing ? legalStarterIdsForSub(display.players, subbing) : new Set<number>()),
-    [display, subbing],
-  );
+  const legalSubTargets = useMemo(() => {
+    if (!display || !subbing) return new Set<number>();
+    const ids = new Set<number>([subbing.element_id]);
+    if (isStarter(subbing)) {
+      for (const id of legalBenchIdsForStarter(display.players, subbing)) ids.add(id);
+    } else {
+      for (const id of legalStarterIdsForSub(display.players, subbing)) ids.add(id);
+      if (isBenchOutfield(subbing)) {
+        for (const player of display.players) {
+          if (isBenchOutfield(player)) ids.add(player.element_id);
+        }
+      }
+    }
+    return ids;
+  }, [display, subbing]);
 
   function goEvent(nextId: number) {
     pendingEventRef.current = nextId;
@@ -261,7 +278,7 @@ export function SquadBoard() {
   }
 
   function persistSquad(players: BoardPlayer[]) {
-    const ids = sortPlayers(players).map((p) => p.element_id);
+    const ids = pinBenchKeeper(players).map((p) => p.element_id);
     const bands = armbandIds(players);
     setElements(ids);
     setCaptainId(bands.captain);
@@ -276,6 +293,19 @@ export function SquadBoard() {
       setSubError("That sub would not be a legal XI (1 GK, 3–5 DEF, 2–5 MID, 1–3 FWD).");
       return;
     }
+    const pinned = pinBenchKeeper(next);
+    const teamXpNext = pinned.reduce((sum, player) => sum + appliedXp(player), 0);
+    setSubError("");
+    setBoard({ ...board, players: pinned, team_xp: Math.round(teamXpNext * 1000) / 1000 });
+    persistSquad(pinned);
+    setSubbing(null);
+    setReplacing(null);
+  }
+
+  function applyBenchSwap(left: BoardPlayer, right: BoardPlayer) {
+    if (!board) return;
+    const next = swapBenchOrder(board.players, left, right);
+    if (!next) return;
     const teamXpNext = next.reduce((sum, player) => sum + appliedXp(player), 0);
     setSubError("");
     setBoard({ ...board, players: next, team_xp: Math.round(teamXpNext * 1000) / 1000 });
@@ -286,7 +316,19 @@ export function SquadBoard() {
 
   function onSubTarget(player: BoardPlayer) {
     if (!replaceable || !subbing) return;
-    if (legalSubTargets.has(player.element_id)) applySub(subbing, player);
+    if (player.element_id === subbing.element_id) {
+      setSubbing(null);
+      setSubError("");
+      return;
+    }
+    if (isBenchOutfield(subbing) && isBenchOutfield(player)) {
+      applyBenchSwap(subbing, player);
+      return;
+    }
+    const benchPlayer = isStarter(subbing) ? player : subbing;
+    const starter = isStarter(subbing) ? subbing : player;
+    if (isStarter(benchPlayer) || !isStarter(starter)) return;
+    applySub(benchPlayer, starter);
   }
 
   function onReplace(player: BoardPlayer) {
@@ -303,13 +345,8 @@ export function SquadBoard() {
     persistSquad(next);
   }
 
-  function onBenchSubClick(player: BoardPlayer) {
-    if (!replaceable) return;
-    if (subbing?.element_id === player.element_id) {
-      setSubbing(null);
-      setSubError("");
-      return;
-    }
+  function onBeginSub(player: BoardPlayer) {
+    if (!replaceable || subbing) return;
     setSubbing(player);
     setReplacing(null);
     setSubError("");
@@ -321,7 +358,7 @@ export function SquadBoard() {
     const afterTenths = bankTenths + sell - hit.now_cost.tenths;
     if (afterTenths < 0) return;
     const nextBank = Math.round(afterTenths) / 10;
-    const currentIds = sortPlayers(board.players).map((p) => p.element_id);
+    const currentIds = pinBenchKeeper(board.players).map((p) => p.element_id);
     const nextIds = currentIds.map((id) => (id === replacing.element_id ? hit.element_id : id));
     const nextCaptain = replacing.is_captain ? hit.element_id : captainId;
     const nextVice = replacing.is_vice_captain ? hit.element_id : viceId;
@@ -342,7 +379,7 @@ export function SquadBoard() {
     if (!board) return null;
     return {
       entryId,
-      elements: sortPlayers(board.players).map((player) => player.element_id),
+      elements: pinBenchKeeper(board.players).map((player) => player.element_id),
       ft: ftOverride ?? board.free_transfers,
       bank: bankOverride ?? board.bank.pounds,
       captain: captainId,
@@ -396,7 +433,7 @@ export function SquadBoard() {
     }));
   }, [display]);
 
-  const bench = useMemo(() => sortPlayers(display?.players ?? []).filter((p) => !isStarter(p)), [display]);
+  const bench = useMemo(() => sortBench(display?.players ?? []), [display]);
   const savedSquad = useMemo(() => readSavedSquad(entryId), [entryId, sessionTick]);
   const draftSquad = useMemo(() => readDraft(entryId), [entryId, sessionTick]);
   const hasEdits = Boolean(elements || bankOverride != null || ftOverride != null || draftSquad);
@@ -504,11 +541,6 @@ export function SquadBoard() {
           </section>
           {replaceable ? (
             <div className="board-toolbar">
-              <p className="board-hint">
-                {subbing
-                  ? `Choose a highlighted starter to swap in ${subbing.web_name}. Illegal options are dimmed.`
-                  : "Click a player for info or replace. Use the swap arrows on the bench to substitute."}
-              </p>
               <div className="board-actions">
                 <button type="button" className="save-btn" onClick={saveSquad}>
                   Save squad
@@ -553,6 +585,7 @@ export function SquadBoard() {
                           onReplace={subbing ? undefined : onReplace}
                           onMakeCaptain={subbing ? undefined : (p) => applyArmband(p, "captain")}
                           onMakeVice={subbing ? undefined : (p) => applyArmband(p, "vice")}
+                          onSubClick={!subbing && replaceable ? onBeginSub : undefined}
                         />
                       ))}
                     </div>
@@ -561,19 +594,27 @@ export function SquadBoard() {
               )}
               {bench.length ? (
                 <section className="pitch-section bench-section">
-                  <div className="row-label">BENCH</div>
                   <div className="pitch-row">
                     {bench.map((player) => (
-                      <PlayerCard
-                        key={`${player.position}-${player.element_id}`}
-                        player={player}
-                        metric={metric}
-                        interactive={replaceable}
-                        selected={subbing?.element_id === player.element_id}
-                        subTone={subbing?.element_id === player.element_id ? "source" : undefined}
-                        onReplace={subbing ? undefined : onReplace}
-                        onSubClick={replaceable ? onBenchSubClick : undefined}
-                      />
+                      <div key={`${player.position}-${player.element_id}`} className="bench-slot">
+                        <div className="bench-pos">{ELEMENT_TYPE_LABEL[player.element_type] ?? "—"}</div>
+                        <PlayerCard
+                          player={player}
+                          metric={metric}
+                          interactive={replaceable}
+                          selected={replacing?.element_id === player.element_id}
+                          subTone={
+                            subbing
+                              ? legalSubTargets.has(player.element_id)
+                                ? "legal"
+                                : "illegal"
+                              : undefined
+                          }
+                          onSelect={subbing ? onSubTarget : undefined}
+                          onReplace={subbing ? undefined : onReplace}
+                          onSubClick={!subbing && replaceable ? onBeginSub : undefined}
+                        />
+                      </div>
                     ))}
                   </div>
                 </section>
